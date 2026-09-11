@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 from aiogram import Router, F
 from aiogram.enums import ChatAction
 from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
-from aiogram.types import Message
+from aiogram.types import Message, BufferedInputFile
 
 from bot.config import config
 from bot.db.database import db
@@ -19,6 +19,7 @@ from bot.llm.client import llm
 from bot.llm.compressor import compressor
 from bot.llm.tokenizer import estimate_tokens
 from bot.services.grounding import grounding_service
+from bot.services.image_tools import is_collage_requested, build_collage
 from bot.services.search_router import search_router
 from bot.services.web_search import web_search_service
 from bot.utils.document_parser import parse_document_content
@@ -170,6 +171,7 @@ async def process_media_items(
 
     user_payload: List[Dict[str, Any]] = [{"type": "text", "text": clean_caption}]
     download_tasks = []
+    photo_bytes_list: List[bytes] = []
 
     # Download and encode all photos and documents concurrently
     for m in items:
@@ -189,6 +191,7 @@ async def process_media_items(
 
             file_bytes = file_io.read()
             if kind == "photo":
+                photo_bytes_list.append(file_bytes)
                 b64_img = base64.b64encode(file_bytes).decode("utf-8")
                 user_payload.append({
                     "type": "image_url",
@@ -203,6 +206,27 @@ async def process_media_items(
                     })
         except Exception as e:
             logger.error(f"Error downloading/parsing media {kind} {file_id}: {e}")
+
+    # If the user requested a collage and provided 2+ photos, generate and send it
+    if len(photo_bytes_list) >= 2 and is_collage_requested(clean_caption):
+        collage_bytes = build_collage(photo_bytes_list)
+        if collage_bytes:
+            try:
+                await primary_message.reply_photo(
+                    BufferedInputFile(collage_bytes, filename="collage.jpg"),
+                    caption="🖼 *Сгенерированный коллаж из ваших фотографий:*",
+                    parse_mode="Markdown"
+                )
+                user_payload.append({
+                    "type": "text",
+                    "text": (
+                        "\n\n[Системное уведомление: Коллаж из прикрепленных фотографий уже успешно "
+                        "сгенерирован локальным модулем и отправлен пользователю отдельным фото. "
+                        "Дай краткий обзор и описание запечатленных объектов/памятников.]"
+                    )
+                })
+            except Exception as e:
+                logger.error(f"Failed to send collage photo: {e}")
 
     # Build DB content description
     if len(items) > 1:
