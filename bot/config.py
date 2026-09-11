@@ -41,7 +41,9 @@ class Settings(BaseSettings):
         default=(
             "You are an intelligent, helpful, and concise AI assistant powered by Gemini. "
             "You format answers nicely using Telegram Markdown, explain complex concepts clearly, "
-            "and adapt to the user's language and tone."
+            "and adapt to the user's language and tone. You interact with the user via Telegram text messages. "
+            "If asked to generate, merge, or manipulate images/files directly, clearly explain your capabilities "
+            "and provide helpful instructions, advice, or code."
         ),
         validation_alias="SYSTEM_PROMPT"
     )

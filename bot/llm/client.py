@@ -33,6 +33,9 @@ class LLMClient:
     ) -> AsyncGenerator[str, None]:
         """Stream chat completion response chunk by chunk."""
         target_model = model or config.default_model
+        yielded_any_content = False
+        detected_tool_calls = False
+
         try:
             stream = await self.client.chat.completions.create(
                 model=target_model,
@@ -43,8 +46,35 @@ class LLMClient:
             async for chunk in stream:
                 if chunk.choices and len(chunk.choices) > 0:
                     delta = chunk.choices[0].delta
-                    if delta and delta.content:
-                        yield delta.content
+                    if delta:
+                        if delta.content:
+                            yielded_any_content = True
+                            yield delta.content
+                        if delta.tool_calls:
+                            detected_tool_calls = True
+
+            # If the stream completed without returning any text (e.g. model invoked an internal tool),
+            # execute a fallback completion with explicit instruction to answer directly in Telegram text.
+            if not yielded_any_content:
+                logger.info(f"Stream returned empty content for {target_model} (tool_calls={detected_tool_calls}). Running fallback...")
+                fallback_messages: List[Any] = list(messages)
+                fallback_messages.append({
+                    "role": "system",
+                    "content": (
+                        "Note: You are communicating directly in a Telegram chat. "
+                        "Do not call external workspace or filesystem tools. "
+                        "Provide your full, helpful answer directly to the user as formatted text."
+                    )
+                })
+                resp = await self.client.chat.completions.create(
+                    model=target_model,
+                    messages=fallback_messages,
+                    temperature=temperature,
+                    stream=False,
+                )
+                if resp.choices and resp.choices[0].message and resp.choices[0].message.content:
+                    yield resp.choices[0].message.content
+
         except RateLimitError as e:
             logger.error(f"Rate limit exceeded on {target_model}: {e}")
             yield "\n\n⚠️ *Превышен лимит запросов (Rate Limit). Пожалуйста, подождите минуту или переключите модель.*"
