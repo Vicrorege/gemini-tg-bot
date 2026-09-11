@@ -14,6 +14,7 @@ from bot.config import config
 from bot.db.database import db
 from bot.handlers import main_router
 from bot.middlewares.auth import AuthMiddleware
+from bot.middlewares.mediagroup import MediaGroupMiddleware
 from bot.middlewares.session import SessionMiddleware
 
 logging.basicConfig(
@@ -77,6 +78,7 @@ async def main():
     dp.message.middleware(AuthMiddleware())
     dp.callback_query.middleware(AuthMiddleware())
     dp.inline_query.middleware(AuthMiddleware())
+    dp.message.middleware(MediaGroupMiddleware())
     dp.message.middleware(SessionMiddleware())
     dp.callback_query.middleware(SessionMiddleware())
 

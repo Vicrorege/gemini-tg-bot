@@ -1,11 +1,11 @@
-"""Handlers for multimodal inputs: photos, documents, and replied media."""
+"""Handlers for multimodal inputs: photos, documents, media groups (albums), and voice."""
 
 import asyncio
 import base64
 import json
 import logging
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from aiogram import Router, F
 from aiogram.enums import ChatAction
@@ -36,10 +36,16 @@ async def stream_and_respond(
     user_payload: Any,
     db_content_storage: str,
     text_query_for_search: str = "",
+    items_count: int = 1,
 ):
     """Generic helper to stream response for multimodal messages with optional web grounding."""
     await message.bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)
-    status_msg = await message.reply("👁 *Анализирую данные и генерирую ответ...*", parse_mode="Markdown")
+    status_text = (
+        f"👁 *Анализирую медиагруппу ({items_count} файлов) и генерирую ответ...*"
+        if items_count > 1
+        else "👁 *Анализирую данные и генерирую ответ...*"
+    )
+    status_msg = await message.reply(status_text, parse_mode="Markdown")
 
     # Optional search if text prompt requests external info
     search_results = []
@@ -132,85 +138,115 @@ async def stream_and_respond(
             await message.reply(chunk, parse_mode=None)
 
 
-@router.message(F.photo)
-async def handle_photo(message: Message, session: Session, user_settings: UserSetting):
-    """Handle image / photo inputs with Vision."""
-    bot_info = await message.bot.get_me()
-    if not is_message_for_bot(message, bot_info.username, bot_info.id):
+async def process_media_items(
+    primary_message: Message,
+    session: Session,
+    user_settings: UserSetting,
+    items: List[Message],
+):
+    """Process a batch of media messages (single item or mediagroup album) into one unified prompt."""
+    bot_info = await primary_message.bot.get_me()
+
+    # Check if addressed to bot (always true in DM)
+    is_for_bot = any(is_message_for_bot(m, bot_info.username, bot_info.id) for m in items)
+    if not is_for_bot:
         return
 
-    photo = message.photo[-1]  # Highest resolution
-    raw_caption = message.caption or ""
-    clean_caption = clean_bot_mention(raw_caption, bot_info.username) or "Опиши это изображение или ответь на вопросы по нему."
+    # Extract non-empty captions across the media group
+    raw_captions = [m.caption for m in items if m.caption]
+    cleaned_captions = [clean_bot_mention(c, bot_info.username) for c in raw_captions if c]
+    clean_caption = "\n".join(cleaned_captions).strip()
 
-    file_io = await message.bot.download(photo.file_id)
-    if not file_io:
-        await message.reply("⚠️ Не удалось скачать изображение.")
-        return
+    has_photos = any(m.photo for m in items)
+    has_documents = any(m.document for m in items)
 
-    img_bytes = file_io.read()
-    b64_img = base64.b64encode(img_bytes).decode("utf-8")
+    if not clean_caption:
+        if has_photos and has_documents:
+            clean_caption = "Опиши эти изображения и документы или ответь на вопросы по ним."
+        elif has_photos:
+            clean_caption = "Опиши эти изображения или ответь на вопросы по ним."
+        else:
+            clean_caption = "Проанализируй эти документы."
 
-    user_payload: List[Dict[str, Any]] = [
-        {"type": "text", "text": clean_caption},
-        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_img}"}}
-    ]
+    user_payload: List[Dict[str, Any]] = [{"type": "text", "text": clean_caption}]
+    download_tasks = []
 
-    db_storage = json.dumps([
-        {"type": "text", "text": f"[Изображение / Фото]: {clean_caption}"}
-    ], ensure_ascii=False)
+    # Download and encode all photos and documents concurrently
+    for m in items:
+        if m.photo:
+            photo = m.photo[-1]
+            download_tasks.append(("photo", photo.file_id, None))
+        elif m.document:
+            doc = m.document
+            if not doc.file_size or doc.file_size <= 20 * 1024 * 1024:
+                download_tasks.append(("document", doc.file_id, doc.file_name or "document.txt"))
+
+    for kind, file_id, filename in download_tasks:
+        try:
+            file_io = await primary_message.bot.download(file_id)
+            if not file_io:
+                continue
+
+            file_bytes = file_io.read()
+            if kind == "photo":
+                b64_img = base64.b64encode(file_bytes).decode("utf-8")
+                user_payload.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/jpeg;base64,{b64_img}"}
+                })
+            elif kind == "document":
+                parsed_text = parse_document_content(file_bytes, filename)
+                if parsed_text:
+                    user_payload.append({
+                        "type": "text",
+                        "text": f"\n\n[Документ: {filename}]\n{parsed_text}"
+                    })
+        except Exception as e:
+            logger.error(f"Error downloading/parsing media {kind} {file_id}: {e}")
+
+    # Build DB content description
+    if len(items) > 1:
+        storage_title = f"[Медиагруппа: {len(items)} файлов]: {clean_caption}"
+    elif has_photos:
+        storage_title = f"[Изображение / Фото]: {clean_caption}"
+    else:
+        storage_title = f"[Документ]: {clean_caption}"
+
+    db_storage = json.dumps([{"type": "text", "text": storage_title}], ensure_ascii=False)
 
     await stream_and_respond(
-        message=message,
+        message=primary_message,
         session=session,
         user_settings=user_settings,
         user_payload=user_payload,
         db_content_storage=db_storage,
-        text_query_for_search=clean_caption
+        text_query_for_search=clean_caption,
+        items_count=len(items)
     )
+
+
+@router.message(F.photo)
+async def handle_photo(
+    message: Message,
+    session: Session,
+    user_settings: UserSetting,
+    album: Optional[List[Message]] = None,
+):
+    """Handle image inputs: single photo or photo album (mediagroup)."""
+    items = album if album else [message]
+    await process_media_items(message, session, user_settings, items)
 
 
 @router.message(F.document)
-async def handle_document(message: Message, session: Session, user_settings: UserSetting):
-    """Handle text, code, or PDF documents."""
-    bot_info = await message.bot.get_me()
-    if not is_message_for_bot(message, bot_info.username, bot_info.id):
-        return
-
-    doc = message.document
-    filename = doc.file_name or "document.txt"
-    raw_caption = message.caption or ""
-    clean_caption = clean_bot_mention(raw_caption, bot_info.username) or "Проанализируй этот файл."
-
-    if doc.file_size and doc.file_size > 20 * 1024 * 1024:
-        await message.reply("⚠️ Файл слишком большой. Максимальный размер: 20 МБ.")
-        return
-
-    file_io = await message.bot.download(doc.file_id)
-    if not file_io:
-        await message.reply("⚠️ Не удалось скачать файл.")
-        return
-
-    file_bytes = file_io.read()
-    parsed_text = parse_document_content(file_bytes, filename)
-
-    if not parsed_text:
-        await message.reply(
-            f"⚠️ Не удалось извлечь текст из файла `{filename}`. "
-            "Поддерживаются текстовые файлы, код (.py, .js, .json, .md) и текстовые PDF.",
-            parse_mode="Markdown"
-        )
-        return
-
-    combined_prompt = f"{clean_caption}\n\n{parsed_text}"
-    await stream_and_respond(
-        message=message,
-        session=session,
-        user_settings=user_settings,
-        user_payload=combined_prompt,
-        db_content_storage=combined_prompt,
-        text_query_for_search=clean_caption
-    )
+async def handle_document(
+    message: Message,
+    session: Session,
+    user_settings: UserSetting,
+    album: Optional[List[Message]] = None,
+):
+    """Handle document inputs: single document or document album (mediagroup)."""
+    items = album if album else [message]
+    await process_media_items(message, session, user_settings, items)
 
 
 @router.message(F.voice)
