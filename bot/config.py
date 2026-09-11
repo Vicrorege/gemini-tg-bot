@@ -1,7 +1,7 @@
 """Configuration settings for Gemini Telegram Bot."""
 
 from pathlib import Path
-from typing import Optional, Set
+from typing import List, Optional, Set, Union
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     openai_api_key: str = Field(default="sk-antigravity", validation_alias="OPENAI_API_KEY")
     default_model: str = Field(default="agy/gemini-3.7-flash-high", validation_alias="DEFAULT_MODEL")
     router_model: str = Field(default="agy/gemini-2.5-flash", validation_alias="ROUTER_MODEL")
+    available_models: Union[List[str], str] = Field(
+        default="agy/gemini-3.7-flash-high,agy/gemini-3.1-pro-high",
+        validation_alias="AVAILABLE_MODELS"
+    )
 
     # Web Search & Internet Intelligence
     web_search_enabled: bool = Field(default=True, validation_alias="WEB_SEARCH_ENABLED")
@@ -60,6 +64,17 @@ class Settings(BaseSettings):
         if isinstance(v, (list, set, tuple)):
             return {int(x) for x in v}
         return set()
+
+    @field_validator("available_models", mode="after")
+    @classmethod
+    def parse_available_models(cls, v):
+        if isinstance(v, str):
+            if not v.strip():
+                return ["agy/gemini-3.7-flash-high", "agy/gemini-3.1-pro-high"]
+            return [m.strip() for m in v.split(",") if m.strip()]
+        if isinstance(v, (list, set, tuple)):
+            return [str(m).strip() for m in v if str(m).strip()]
+        return ["agy/gemini-3.7-flash-high", "agy/gemini-3.1-pro-high"]
 
     def get_db_path(self) -> Path:
         p = Path(self.db_path)

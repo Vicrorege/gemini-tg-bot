@@ -26,6 +26,14 @@ def build_web_mode_keyboard(current_mode: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
+def build_model_keyboard(current_model: str) -> InlineKeyboardMarkup:
+    buttons = []
+    for model_name in config.available_models:
+        prefix = "✅ " if model_name == current_model else "⚪️ "
+        buttons.append([InlineKeyboardButton(text=f"{prefix}{model_name}", callback_data=f"model:set:{model_name}")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
 @router.message(CommandStart())
 async def cmd_start(message: Message, session: Session, user_settings: UserSetting):
     web_mode_str = {
@@ -203,24 +211,39 @@ async def cmd_delete(message: Message, session: Session):
 
 @router.message(Command("model"))
 async def cmd_model(message: Message, command: CommandObject, session: Session, user_settings: UserSetting):
+    cur_model = session.model or user_settings.selected_model or config.default_model
+
     if not command.args or not command.args.strip():
-        cur_model = session.model or user_settings.selected_model or config.default_model
+        kb = build_model_keyboard(cur_model)
         text = (
-            f"🤖 *Текущая модель:* `{cur_model}`\n\n"
-            "💡 *Чтобы сменить модель, отправьте:*\n"
-            "`/model <название_модели>`\n\n"
-            "🔥 *Популярные модели Antigravity / Gemini:*\n"
-            "• `agy/gemini-3.7-flash-high` *(по умолчанию, умная и быстрая)*\n"
-            "• `agy/gemini-2.5-flash` *(молниеносные ответы)*\n"
-            "• `auto/best-chat` *(автоматический выбор лучшей модели)*\n"
-            "• `auto/best-fast` *(максимальная скорость)*\n"
+            f"🤖 *Выбор модели нейросети:*\n\n"
+            f"• *Текущая модель:* `{cur_model}`\n\n"
+            "Выберите подходящую модель из доступного пула под ваши задачи:"
         )
-        await message.answer(text, parse_mode="Markdown")
+        await message.answer(text, reply_markup=kb, parse_mode="Markdown")
         return
 
     new_model = command.args.strip()
     await db.set_user_model(message.from_user.id, new_model)
+    session.model = new_model
     await message.answer(f"✅ Модель успешно изменена на: `{new_model}`", parse_mode="Markdown")
+
+
+@router.callback_query(F.data.startswith("model:set:"))
+async def cb_select_model(callback: CallbackQuery, session: Session):
+    model_name = callback.data.split("model:set:", 1)[1]
+    user_id = callback.from_user.id
+    if model_name in config.available_models:
+        await db.set_user_model(user_id, model_name)
+        session.model = model_name
+        kb = build_model_keyboard(model_name)
+        try:
+            await callback.message.edit_reply_markup(reply_markup=kb)
+        except Exception:
+            pass
+        await callback.answer(f"Модель переключена на: {model_name}")
+    else:
+        await callback.answer("⚠️ Модель не найдена в пуле.", show_alert=True)
 
 
 @router.message(Command("compress"))
