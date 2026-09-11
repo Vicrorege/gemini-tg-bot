@@ -1,0 +1,10 @@
+services:
+  gemini-bot:
+    build: .
+    container_name: gemini-tg-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    network_mode: "host" # Allows direct access to local LLM endpoint (127.0.0.1:8400)

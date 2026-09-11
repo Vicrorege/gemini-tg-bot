@@ -1,0 +1,21 @@
+[Unit]
+Description=Gemini Telegram Bot Service (Antigravity LLM Backend)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/projects/gemini-tg-bot
+ExecStart=/root/projects/gemini-tg-bot/.venv/bin/python bot/main.py
+Restart=always
+RestartSec=5
+EnvironmentFile=/root/projects/gemini-tg-bot/.env
+
+# Security Sandbox
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/root/projects/gemini-tg-bot/data
+
+[Install]
+WantedBy=multi-user.target
