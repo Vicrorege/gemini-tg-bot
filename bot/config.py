@@ -15,7 +15,7 @@ class Settings(BaseSettings):
 
     # Telegram
     bot_token: str = Field(default="", validation_alias="BOT_TOKEN")
-    allowed_telegram_ids: Set[int] = Field(default_factory=set, validation_alias="ALLOWED_TELEGRAM_IDS")
+    allowed_telegram_ids: Union[Set[int], str] = Field(default_factory=set, validation_alias="ALLOWED_TELEGRAM_IDS")
     telegram_proxy_url: Optional[str] = Field(default=None, validation_alias="TELEGRAM_PROXY_URL")
 
     # LLM (Antigravity / OpenAI-compatible Gemini API)
@@ -54,7 +54,7 @@ class Settings(BaseSettings):
     # Database
     db_path: str = Field(default="data/bot.db", validation_alias="DB_PATH")
 
-    @field_validator("allowed_telegram_ids", mode="before")
+    @field_validator("allowed_telegram_ids", mode="after")
     @classmethod
     def parse_allowed_ids(cls, v):
         if isinstance(v, int):
