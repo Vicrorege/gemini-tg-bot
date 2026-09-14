@@ -18,6 +18,27 @@ def is_collage_requested(text: str) -> bool:
     return bool(COLLAGE_TRIGGERS.search(text))
 
 
+def optimize_image_for_vision(
+    image_bytes: bytes,
+    max_dimension: int = 1568,
+    quality: int = 85
+) -> bytes:
+    """
+    Resize image to fit within max_dimension (preserving aspect ratio)
+    and compress to optimized JPEG to avoid large payloads (HTTP 413) and speed up vision inference.
+    """
+    try:
+        with Image.open(io.BytesIO(image_bytes)) as img:
+            img = img.convert("RGB")
+            if max(img.size) > max_dimension:
+                img.thumbnail((max_dimension, max_dimension), Image.Resampling.LANCZOS)
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=quality, optimize=True)
+            return buf.getvalue()
+    except Exception:
+        return image_bytes
+
+
 def build_collage(
     images_bytes: List[bytes],
     cell_size: tuple = (1000, 700),

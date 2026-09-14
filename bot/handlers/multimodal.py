@@ -19,7 +19,7 @@ from bot.llm.client import llm
 from bot.llm.compressor import compressor
 from bot.llm.tokenizer import estimate_tokens
 from bot.services.grounding import grounding_service
-from bot.services.image_tools import is_collage_requested, build_collage
+from bot.services.image_tools import is_collage_requested, build_collage, optimize_image_for_vision
 from bot.services.search_router import search_router
 from bot.services.web_search import web_search_service
 from bot.utils.document_parser import parse_document_content
@@ -192,7 +192,8 @@ async def process_media_items(
             file_bytes = file_io.read()
             if kind == "photo":
                 photo_bytes_list.append(file_bytes)
-                b64_img = base64.b64encode(file_bytes).decode("utf-8")
+                optimized_bytes = optimize_image_for_vision(file_bytes)
+                b64_img = base64.b64encode(optimized_bytes).decode("utf-8")
                 user_payload.append({
                     "type": "image_url",
                     "image_url": {"url": f"data:image/jpeg;base64,{b64_img}"}
